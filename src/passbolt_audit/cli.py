@@ -10,52 +10,69 @@ from passbolt_audit import core
 def main() -> int:
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
-        description="Auditoría de contraseñas débiles en Passbolt CE"
+        description="Passbolt CE password auditor - audit weak, reused, and compromised credentials"
+    )
+    parser.add_argument(
+        "--server",
+        "-s",
+        required=True,
+        help="Passbolt server URL (e.g., https://passbolt.dc.in.antel.net.uy)",
+    )
+    parser.add_argument(
+        "--configure",
+        "-c",
+        action="store_true",
+        help="Show go-passbolt-cli configuration instructions",
     )
     parser.add_argument(
         "--output",
         "-o",
         default=f"passbolt_audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-        help="Archivo CSV de salida (default: passbolt_audit_FECHA.csv)",
+        help="Output CSV file (default: passbolt_audit_DATE.csv)",
     )
     parser.add_argument(
-        "--solo-debiles",
+        "--weak-only",
         action="store_true",
-        help="Incluir solo contraseñas débiles en el CSV",
+        help="Include only weak passwords in CSV",
     )
     parser.add_argument(
-        "--solo-reutilizadas",
+        "--reused-only",
         action="store_true",
-        help="Incluir solo contraseñas reutilizadas en el CSV",
+        help="Include only reused passwords in CSV",
     )
     parser.add_argument(
         "--skip-hibp",
         action="store_true",
-        help="Omitir consulta a Have I Been Pwned (usar si no hay internet)",
+        help="Skip Have I Been Pwned query (use when no internet)",
     )
     parser.add_argument(
         "--limite",
         "-n",
         type=int,
         default=0,
-        help="Limitar a N recursos (útil para pruebas, 0 = todos)",
+        help="Limit to N resources (useful for testing, 0 = all)",
     )
     args = parser.parse_args()
 
-    print("\n━━━ Passbolt CE — Auditoría de Contraseñas ━━━")
-    print(f"  Inicio: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    if args.configure:
+        core.configure_passbolt(args.server, "", "")
+        return 0
+
+    print("\n━━━ Passbolt CE — Password Audit ━━━")
+    print(f"  Start: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(
-        f"  Umbral débil: score ≤ {core.UMBRAL_DEBIL} o longitud < {core.LONGITUD_MINIMA}\n"
+        f"  Weak threshold: score ≤ {core.UMBRAL_DEBIL} or length < {core.LONGITUD_MINIMA}\n"
     )
 
     resources = core.get_all_resources()
     if not resources:
-        print("[ERROR] No se obtuvieron recursos. Verificá la configuración del CLI.")
+        print("[ERROR] No resources obtained. Check CLI configuration.")
+        print("         Did you run --configure first?")
         return 1
 
     if args.limite > 0:
         resources = resources[: args.limite]
-        print(f"[!] Modo prueba: procesando solo {args.limite} recursos.\n")
+        print(f"[!] Test mode: processing only {args.limite} resources.\n")
 
     resultados: list[dict[str, Any]] = []
     errores = 0
@@ -75,7 +92,7 @@ def main() -> int:
         if password is None:
             errores += 1
 
-        evaluacion = core.evaluar_password(password, nombre, usuario)
+        evaluacion = core.evaluate_password(password, nombre, usuario)
         evaluacion.update(
             {
                 "id": rid,
@@ -90,17 +107,17 @@ def main() -> int:
     print()
 
     if errores > 0:
-        print(f"\n[!] {errores} recursos con error al descifrar.")
+        print(f"\n[!] {errores} resources with decryption error.")
 
-    print("[*] Detectando contraseñas reutilizadas...")
-    total_reutilizadas, grupos_reutilizacion = core.detectar_reutilizadas(resultados)
+    print("[*] Detecting reused passwords...")
+    total_reutilizadas, grupos_reutilizacion = core.detect_reused_passwords(resultados)
 
     total_pwned = 0
     if not args.skip_hibp:
         total_pwned = core.consultar_hibp_bulk(resultados)
-        print(f"[*] HIBP: {total_pwned} contraseñas comprometidas encontradas.")
+        print(f"[*] HIBP: {total_pwned} compromised passwords found.")
     else:
-        print("[!] Consulta HIBP omitida (--skip-hibp).")
+        print("[!] HIBP query skipped (--skip-hibp).")
         for r in resultados:
             r.setdefault("pwned", None)
             r.setdefault("pwned_count", None)
@@ -108,17 +125,17 @@ def main() -> int:
     for r in resultados:
         r.pop("_password_raw", None)
 
-    if args.solo_reutilizadas:
+    if args.reused_only:
         a_exportar = [r for r in resultados if r["reutilizada"]]
-    elif args.solo_debiles:
+    elif args.weak_only:
         a_exportar = [r for r in resultados if r["debil"]]
     else:
         a_exportar = resultados
 
-    core.imprimir_resumen(
+    core.print_summary(
         resultados, total_reutilizadas, grupos_reutilizacion, total_pwned
     )
-    core.generar_reporte_csv(a_exportar, args.output)
+    core.generate_csv_report(a_exportar, args.output)
 
     print(f"\n  Fin: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
 

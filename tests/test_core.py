@@ -75,47 +75,47 @@ class TestGetSecret:
             assert result is None
 
 
-class TestEvaluarPassword:
-    def test_evaluar_password_empty(self):
-        result = core.evaluar_password("", "resource", "user")
+class TestEvaluatePassword:
+    def test_evaluate_password_empty(self):
+        result = core.evaluate_password("", "resource", "user")
         assert result["score"] == -1
         assert result["debil"] is True
-        assert result["label"] == "Sin contraseña"
+        assert result["label"] == "No password"
 
-    def test_evaluar_password_none(self):
-        result = core.evaluar_password(None, "resource", "user")
+    def test_evaluate_password_none(self):
+        result = core.evaluate_password(None, "resource", "user")
         assert result["score"] == -1
         assert result["debil"] is True
 
-    def test_evaluar_password_strong(self, mock_zxcvbn_strong):
+    def test_evaluate_password_strong(self, mock_zxcvbn_strong):
         with patch("zxcvbn.zxcvbn", return_value=mock_zxcvbn_strong):
-            result = core.evaluar_password("Tr0ub4dor&3Password", "resource", "user")
+            result = core.evaluate_password("Tr0ub4dor&3Password", "resource", "user")
             assert result["score"] == 4
             assert result["debil"] is False
             assert result["crack_time"] == "centuries"
             assert result["longitud"] == 19
 
-    def test_evaluar_password_weak(self, mock_zxcvbn_weak):
+    def test_evaluate_password_weak(self, mock_zxcvbn_weak):
         with patch("zxcvbn.zxcvbn", return_value=mock_zxcvbn_weak):
-            result = core.evaluar_password("password", "resource", "user")
+            result = core.evaluate_password("password", "resource", "user")
             assert result["score"] == 1
             assert result["debil"] is True
-            assert "Score zxcvbn" in result["razon"]
+            assert "zxcvbn score" in result["razon"]
             assert "top-10 common password" in result["razon"]
 
-    def test_evaluar_password_short(self, mock_zxcvbn_strong):
+    def test_evaluate_password_short(self, mock_zxcvbn_strong):
         with patch("zxcvbn.zxcvbn", return_value=mock_zxcvbn_strong):
-            result = core.evaluar_password("short", "resource", "user")
+            result = core.evaluate_password("short", "resource", "user")
             assert result["longitud"] == 5
             assert result["debil"] is True
-            assert "Longitud" in result["razon"]
+            assert "Length" in result["razon"]
 
-    def test_evaluar_password_warning(self, mock_zxcvbn_weak):
+    def test_evaluate_password_warning(self, mock_zxcvbn_weak):
         with patch("zxcvbn.zxcvbn", return_value=mock_zxcvbn_weak):
-            result = core.evaluar_password("weakpass", "resource", "user")
+            result = core.evaluate_password("weakpass", "resource", "user")
             assert (
                 "warning" in result["razon"].lower()
-                or "Score zxcvbn" in result["razon"]
+                or "zxcvbn score" in result["razon"]
             )
 
 
@@ -160,47 +160,47 @@ class TestConsultarHibpBulk:
         assert resultados[0]["pwned_count"] is None
 
 
-class TestDetectarReutilizadas:
-    def test_detectar_reutilizadas_none(self):
+class TestDetectReusedPasswords:
+    def test_detect_reused_passwords_none(self):
         resultados = [
             {"_password_raw": "pass1", "debil": False},
             {"_password_raw": "pass2", "debil": False},
         ]
-        total, grupos = core.detectar_reutilizadas(resultados)
+        total, grupos = core.detect_reused_passwords(resultados)
         assert total == 0
         assert grupos == 0
 
-    def test_detectar_reutilizadas_found(self):
+    def test_detect_reused_passwords_found(self):
         resultados = [
             {"_password_raw": "samepass", "debil": False, "nombre": "A"},
             {"_password_raw": "samepass", "debil": False, "nombre": "B"},
             {"_password_raw": "other", "debil": False, "nombre": "C"},
         ]
-        total, grupos = core.detectar_reutilizadas(resultados)
+        total, grupos = core.detect_reused_passwords(resultados)
         assert total == 2
         assert grupos == 1
 
-    def test_detectar_reutilizadas_adds_fields(self):
+    def test_detect_reused_passwords_adds_fields(self):
         resultados = [
             {"_password_raw": "samepass", "debil": False},
             {"_password_raw": "samepass", "debil": False},
         ]
-        core.detectar_reutilizadas(resultados)
+        core.detect_reused_passwords(resultados)
         assert resultados[0]["reutilizada"] is True
         assert resultados[0]["grupo_reutilizacion"] == 1
         assert resultados[0]["veces_reutilizada"] == 2
 
-    def test_detectar_reutilizadas_marks_debil(self):
+    def test_detect_reused_passwords_marks_debil(self):
         resultados = [
             {"_password_raw": "samepass", "debil": False},
             {"_password_raw": "samepass", "debil": False},
         ]
-        core.detectar_reutilizadas(resultados)
+        core.detect_reused_passwords(resultados)
         assert resultados[0]["debil"] is True
 
 
-class TestGenerarReporteCsv:
-    def test_generar_reporte_csv(self, tmp_path):
+class TestGenerateCsvReport:
+    def test_generate_csv_report(self, tmp_path):
         resultados = [
             {
                 "id": "1",
@@ -208,7 +208,7 @@ class TestGenerarReporteCsv:
                 "usuario": "user",
                 "uri": "http://test.com",
                 "score": 4,
-                "label": "Fuerte",
+                "label": "Strong",
                 "longitud": 10,
                 "debil": False,
                 "razon": "",
@@ -222,15 +222,15 @@ class TestGenerarReporteCsv:
             }
         ]
         csv_path = tmp_path / "test.csv"
-        core.generar_reporte_csv(resultados, str(csv_path))
+        core.generate_csv_report(resultados, str(csv_path))
         assert csv_path.exists()
         content = csv_path.read_text()
         assert "Test" in content
         assert "user" in content
 
 
-class TestImprimirResumen:
-    def test_imprimir_resumen_basic(self, capsys):
+class TestPrintSummary:
+    def test_print_summary_basic(self, capsys):
         resultados = [
             {
                 "score": 2,
@@ -260,10 +260,10 @@ class TestImprimirResumen:
                 "reutilizada": False,
             },
         ]
-        core.imprimir_resumen(resultados, 0, 0, 0)
+        core.print_summary(resultados, 0, 0, 0)
         captured = capsys.readouterr()
-        assert "RESUMEN" in captured.out
-        assert "Total de recursos auditados" in captured.out
+        assert "PASSBOLT" in captured.out
+        assert "Total resources audited" in captured.out
 
 
 class TestScoreLabels:
@@ -273,8 +273,8 @@ class TestScoreLabels:
         assert 2 in core.SCORE_LABELS
         assert 3 in core.SCORE_LABELS
         assert 4 in core.SCORE_LABELS
-        assert core.SCORE_LABELS[0] == "Muy débil"
-        assert core.SCORE_LABELS[4] == "Muy fuerte"
+        assert core.SCORE_LABELS[0] == "Very weak"
+        assert core.SCORE_LABELS[4] == "Very strong"
 
 
 class TestConstants:
@@ -283,3 +283,11 @@ class TestConstants:
 
     def test_longitud_minima(self):
         assert core.LONGITUD_MINIMA == 12
+
+
+class TestConfigurePassbolt:
+    def test_configure_passbolt_shows_instructions(self, capsys):
+        result = core.configure_passbolt("https://passbolt.test", "password", "/tmp/key.asc")
+        assert result is False
+        captured = capsys.readouterr()
+        assert "go-passbolt-cli must be configured manually" in captured.out

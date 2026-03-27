@@ -3,7 +3,9 @@
 import csv
 import hashlib
 import json
+import os
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -14,12 +16,35 @@ UMBRAL_DEBIL = 2
 LONGITUD_MINIMA = 12
 
 SCORE_LABELS = {
-    0: "Muy débil",
-    1: "Débil",
-    2: "Aceptable",
-    3: "Fuerte",
-    4: "Muy fuerte",
+    0: "Very weak",
+    1: "Weak",
+    2: "Acceptable",
+    3: "Strong",
+    4: "Very strong",
 }
+
+DEFAULT_KEYFILE = os.path.expanduser("~/.gnupg/passbolt_private.key")
+
+
+def configure_passbolt(server_address: str, user_password: str, private_key_path: str) -> bool:
+    """Show manual configuration instructions."""
+    print("[*] To configure go-passbolt-cli, run:")
+    print()
+    print("    passbolt --serverAddress <URL> --userPassword <PASS> --userPrivateKeyFile <KEY> configure")
+    print()
+    print("    <URL>  = Your Passbolt server (e.g., https://passbolt.dc.in.antel.net.uy)")
+    print("    <PASS> = Your Passbolt password")
+    print("    <KEY>  = Path to your GPG private key file")
+    print()
+    print("    IMPORTANT: The GPG key must NOT have a passphrase.")
+    print("               go-passbolt-cli does not support passphrase-protected keys.")
+    print()
+    print("    To check if your key has a passphrase:")
+    print("        gpg --list-packets your-key.asc | grep -i s2k")
+    print("    If you see 'S2K' or 'protection', the key is protected.")
+    print()
+    print("    To get an unprotected key, export it without passphrase from GPG.")
+    return False
 
 
 def run_cli(args: list[str]) -> str | None:
@@ -67,17 +92,17 @@ def get_secret(resource_id: str) -> str | None:
         return None
 
 
-def evaluar_password(password: str | None, nombre: str, usuario: str) -> dict[str, Any]:
+def evaluate_password(password: str | None, nombre: str, usuario: str) -> dict[str, Any]:
     """Evaluate password strength using zxcvbn."""
     import zxcvbn  # type: ignore[import-untyped]
 
     if not password:
         return {
             "score": -1,
-            "label": "Sin contraseña",
+            "label": "No password",
             "longitud": 0,
             "debil": True,
-            "razon": "Vacía o no descifrable",
+            "razon": "Empty or not decryptable",
             "sugerencias": [],
             "crack_time": "",
         }
@@ -93,15 +118,15 @@ def evaluar_password(password: str | None, nombre: str, usuario: str) -> dict[st
 
     razones = []
     if score <= UMBRAL_DEBIL:
-        razones.append(f"Score zxcvbn: {score}/4")
+        razones.append(f"zxcvbn score: {score}/4")
     if longitud < LONGITUD_MINIMA:
-        razones.append(f"Longitud: {longitud} chars (mín. {LONGITUD_MINIMA})")
+        razones.append(f"Length: {longitud} chars (min. {LONGITUD_MINIMA})")
     if warning:
         razones.append(warning)
 
     return {
         "score": score,
-        "label": SCORE_LABELS.get(score, "Desconocido"),
+        "label": SCORE_LABELS.get(score, "Unknown"),
         "longitud": longitud,
         "debil": debil,
         "razon": " | ".join(razones) if razones else "",
@@ -154,7 +179,7 @@ def consultar_hibp_bulk(resultados: list[dict[str, Any]], delay: float = 0.7) ->
                         if not resultados[idx]["debil"]:
                             resultados[idx]["debil"] = True
                         razon = resultados[idx].get("razon", "")
-                        nueva_razon = f"Comprometida ({count:,} veces en HIBP)"
+                        nueva_razon = f"Compromised ({count:,} times in HIBP)"
                         resultados[idx]["razon"] = (razon + " | " + nueva_razon).lstrip(
                             " | "
                         )
@@ -180,7 +205,7 @@ def consultar_hibp_bulk(resultados: list[dict[str, Any]], delay: float = 0.7) ->
     return pwned_encontradas
 
 
-def detectar_reutilizadas(resultados: list[dict[str, Any]]) -> tuple[int, int]:
+def detect_reused_passwords(resultados: list[dict[str, Any]]) -> tuple[int, int]:
     """Detect reused passwords across resources using SHA-256."""
     hash_map: dict[str, list[int]] = defaultdict(list)
 
@@ -190,18 +215,18 @@ def detectar_reutilizadas(resultados: list[dict[str, Any]]) -> tuple[int, int]:
             h = hashlib.sha256(pwd.encode("utf-8")).hexdigest()
             hash_map[h].append(i)
 
-    grupo_num = 1
+    group_num = 1
     for h, indices in hash_map.items():
         if len(indices) > 1:
             for idx in indices:
                 resultados[idx]["reutilizada"] = True
-                resultados[idx]["grupo_reutilizacion"] = grupo_num
+                resultados[idx]["grupo_reutilizacion"] = group_num
                 resultados[idx]["veces_reutilizada"] = len(indices)
                 if not resultados[idx]["debil"]:
                     resultados[idx]["debil"] = True
                     razon = resultados[idx].get("razon", "")
-                    resultados[idx]["razon"] = (razon + " | Reutilizada").lstrip(" | ")
-            grupo_num += 1
+                    resultados[idx]["razon"] = (razon + " | Reused").lstrip(" | ")
+            group_num += 1
 
     for r in resultados:
         r.setdefault("reutilizada", False)
@@ -209,53 +234,53 @@ def detectar_reutilizadas(resultados: list[dict[str, Any]]) -> tuple[int, int]:
         r.setdefault("veces_reutilizada", 1)
 
     total_reutilizadas = sum(1 for r in resultados if r["reutilizada"])
-    grupos = grupo_num - 1
+    grupos = group_num - 1
     return total_reutilizadas, grupos
 
 
-def generar_reporte_csv(resultados: list[dict[str, Any]], path: str) -> None:
+def generate_csv_report(resultados: list[dict[str, Any]], path: str) -> None:
     """Write results to CSV file."""
-    campos = [
+    fields = [
         "id",
-        "nombre",
-        "usuario",
+        "name",
+        "username",
         "uri",
         "score",
-        "fortaleza",
-        "longitud",
-        "debil",
-        "razon",
+        "strength",
+        "length",
+        "weak",
+        "reason",
         "crack_time_offline",
-        "sugerencias",
-        "reutilizada",
-        "grupo_reutilizacion",
-        "veces_reutilizada",
+        "suggestions",
+        "reused",
+        "reuse_group",
+        "reuse_count",
         "pwned",
         "pwned_count",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=campos)
+        writer = csv.DictWriter(f, fieldnames=fields)
         writer.writeheader()
         for r in resultados:
             writer.writerow(
                 {
                     "id": r["id"],
-                    "nombre": r["nombre"],
-                    "usuario": r["usuario"],
+                    "name": r["nombre"],
+                    "username": r["usuario"],
                     "uri": r.get("uri", ""),
                     "score": r["score"],
-                    "fortaleza": r["label"],
-                    "longitud": r["longitud"],
-                    "debil": "SÍ" if r["debil"] else "NO",
-                    "razon": r["razon"],
+                    "strength": r["label"],
+                    "length": r["longitud"],
+                    "weak": "YES" if r["debil"] else "NO",
+                    "reason": r["razon"],
                     "crack_time_offline": r.get("crack_time", ""),
-                    "sugerencias": " / ".join(r.get("sugerencias", [])),
-                    "reutilizada": "SÍ" if r["reutilizada"] else "NO",
-                    "grupo_reutilizacion": r["grupo_reutilizacion"],
-                    "veces_reutilizada": r["veces_reutilizada"]
+                    "suggestions": " / ".join(r.get("sugerencias", [])),
+                    "reused": "YES" if r["reutilizada"] else "NO",
+                    "reuse_group": r["grupo_reutilizacion"],
+                    "reuse_count": r["veces_reutilizada"]
                     if r["reutilizada"]
                     else "",
-                    "pwned": "SÍ"
+                    "pwned": "YES"
                     if r.get("pwned")
                     else ("ERROR" if r.get("pwned") is None else "NO"),
                     "pwned_count": r.get("pwned_count", "")
@@ -265,7 +290,7 @@ def generar_reporte_csv(resultados: list[dict[str, Any]], path: str) -> None:
             )
 
 
-def imprimir_resumen(
+def print_summary(
     resultados: list[dict[str, Any]],
     total_reutilizadas: int,
     grupos_reutilizacion: int,
@@ -278,20 +303,20 @@ def imprimir_resumen(
     reutilizadas = [r for r in resultados if r["reutilizada"]]
 
     print(f"\n{'─' * 60}")
-    print("  RESUMEN DE AUDITORÍA PASSBOLT")
+    print("  PASSBOLT AUDIT SUMMARY")
     print(f"{'─' * 60}")
-    print(f"  Total de recursos auditados : {total}")
-    print(f"  Contraseñas débiles         : {len(debiles)}")
+    print(f"  Total resources audited  : {total}")
+    print(f"  Weak passwords          : {len(debiles)}")
     print(
-        f"  Contraseñas reutilizadas    : {total_reutilizadas} en {grupos_reutilizacion} grupos"
+        f"  Reused passwords        : {total_reutilizadas} in {grupos_reutilizacion} groups"
     )
-    print(f"  Comprometidas en HIBP       : {total_pwned}")
-    print(f"  Sin contraseña / error      : {len(vacias)}")
-    print(f"  Contraseñas aceptables+     : {total - len(debiles)}")
+    print(f"  Compromised (HIBP)      : {total_pwned}")
+    print(f"  No password / error     : {len(vacias)}")
+    print(f"  Acceptable+ passwords  : {total - len(debiles)}")
     print(f"{'─' * 60}")
 
     if debiles:
-        print("\n  TOP DÉBILES:")
+        print("\n  TOP WEAK PASSWORDS:")
         for r in sorted(debiles, key=lambda x: x["score"])[:20]:
             print(
                 f"  [{r['score']}/4] {r['nombre'][:35]:<35} "
@@ -299,26 +324,26 @@ def imprimir_resumen(
                 f"len:{r['longitud']:>3}  {r['razon']}"
             )
         if len(debiles) > 20:
-            print(f"  ... y {len(debiles) - 20} más (ver CSV completo)")
+            print(f"  ... and {len(debiles) - 20} more (see full CSV)")
 
     if reutilizadas:
-        print("\n  CONTRASEÑAS REUTILIZADAS (primeros 10 grupos):")
+        print("\n  REUSED PASSWORDS (first 10 groups):")
         grupos: dict[int, list[str]] = defaultdict(list)
         for r in reutilizadas:
             grupos[r["grupo_reutilizacion"]].append(r["nombre"])
         for gid, nombres in list(grupos.items())[:10]:
             nombres_str = ", ".join(n[:25] for n in nombres[:5])
             if len(nombres) > 5:
-                nombres_str += f" (+{len(nombres) - 5} más)"
-            print(f"  Grupo {gid:>3} ({len(nombres)} recursos): {nombres_str}")
+                nombres_str += f" (+{len(nombres) - 5} more)"
+            print(f"  Group {gid:>3} ({len(nombres)} resources): {nombres_str}")
         if len(grupos) > 10:
-            print(f"  ... y {len(grupos) - 10} grupos más (ver CSV completo)")
+            print(f"  ... and {len(grupos) - 10} more groups (see full CSV)")
 
-    print("\n  DISTRIBUCIÓN POR SCORE:")
+    print("\n  SCORE DISTRIBUTION:")
     for s in range(-1, 5):
         count = sum(1 for r in resultados if r["score"] == s)
         if count == 0:
             continue
-        label = SCORE_LABELS.get(s, "Error/Vacía")
+        label = SCORE_LABELS.get(s, "Error/Empty")
         barra = "█" * min(count, 50)
         print(f"  {s:>2} {label:<12} {barra} {count}")
